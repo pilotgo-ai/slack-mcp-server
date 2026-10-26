@@ -1,0 +1,55 @@
+name: Release (Brain fork)
+
+# Fork-only release: builds the linux-amd64 binary that the Brain session image
+# downloads and attaches it to a GitHub release for the pushed tag. Upstream's
+# npm and Docker image release workflows are removed in this fork.
+
+on:
+  push:
+    tags:
+      - 'v*-brain.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: "go.mod"
+
+      - name: Unit tests
+        run: go test -count=1 -run=".*Unit.*" ./...
+
+      - name: Build linux-amd64
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          PKG=github.com/korotovsky/slack-mcp-server
+          go build -trimpath -ldflags "-s -w \
+            -X '${PKG}/pkg/version.CommitHash=${GITHUB_SHA}' \
+            -X '${PKG}/pkg/version.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)' \
+            -X '${PKG}/pkg/version.Version=${GITHUB_REF_NAME}' \
+            -X '${PKG}/pkg/version.BinaryName=slack-mcp-server'" \
+            -o build/slack-mcp-server-linux-amd64 ./cmd/slack-mcp-server
+          (cd build && sha256sum slack-mcp-server-linux-amd64 > slack-mcp-server-linux-amd64.sha256)
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            build/slack-mcp-server-linux-amd64 \
+            build/slack-mcp-server-linux-amd64.sha256 \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Brain fork of korotovsky/slack-mcp-server: adds conversations_update_message and conversations_delete_message."

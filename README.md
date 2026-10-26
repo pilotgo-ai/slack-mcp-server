@@ -1,3 +1,6 @@
+> [!NOTE]
+> **pilotgo-ai fork.** This is a fork of [korotovsky/slack-mcp-server](https://github.com/korotovsky/slack-mcp-server) (MIT) used by Brain. Branch `brain` = upstream `v1.3.0` plus two tools: `conversations_update_message` (edit your own message in place via `chat.update` with `parse=none`, so `<url|text>` links survive) and `conversations_delete_message` (`chat.delete`, irreversible). Both are gated by the same `SLACK_MCP_ADD_MESSAGE_TOOL` channel policy as `conversations_add_message` (or listed individually in `SLACK_MCP_ENABLED_TOOLS`). Releases `v<upstream>-brain.<n>` ship a `slack-mcp-server-linux-amd64` binary; upstream's npm and Docker releases are not published from this fork. The code lives in `pkg/handler/messages_edit.go` to keep rebases onto upstream simple.
+
 # Slack MCP Server
 [![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/korotovsky/slack-mcp-server)](https://archestra.ai/mcp-catalog/korotovsky__slack-mcp-server)
 

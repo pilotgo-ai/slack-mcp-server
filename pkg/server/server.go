@@ -28,6 +28,8 @@ const (
 	ToolConversationsHistory        = "conversations_history"
 	ToolConversationsReplies        = "conversations_replies"
 	ToolConversationsAddMessage     = "conversations_add_message"
+	ToolConversationsUpdateMessage  = "conversations_update_message"
+	ToolConversationsDeleteMessage  = "conversations_delete_message"
 	ToolReactionsAdd                = "reactions_add"
 	ToolReactionsRemove             = "reactions_remove"
 	ToolAttachmentGetData           = "attachment_get_data"
@@ -53,6 +55,8 @@ var ValidToolNames = []string{
 	ToolConversationsHistory,
 	ToolConversationsReplies,
 	ToolConversationsAddMessage,
+	ToolConversationsUpdateMessage,
+	ToolConversationsDeleteMessage,
 	ToolReactionsAdd,
 	ToolReactionsRemove,
 	ToolAttachmentGetData,
@@ -199,6 +203,46 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 				mcp.Description("Raw Slack Block Kit JSON array for rich message formatting (rich_text lists, code blocks, etc.). When provided, this takes precedence over text/content_type for rendering. The text parameter becomes the notification fallback text."),
 			),
 		), conversationsHandler.ConversationsAddMessageHandler)
+	}
+
+	if shouldAddTool(ToolConversationsUpdateMessage, enabledTools, "SLACK_MCP_ADD_MESSAGE_TOOL") {
+		s.AddTool(mcp.NewTool(ToolConversationsUpdateMessage,
+			mcp.WithDescription("Edit a message the authenticated user sent earlier, in place, in a public channel, private channel, thread or direct message (DM, or IM). Identify it by channel_id and its own ts (a thread reply needs only its own ts). Slack refuses to edit other people's messages (cant_update_message). Gated by the same SLACK_MCP_ADD_MESSAGE_TOOL channel policy as conversations_add_message."),
+			mcp.WithTitleAnnotation("Edit Message"),
+			mcp.WithDestructiveHintAnnotation(true),
+			mcp.WithString("channel_id",
+				mcp.Required(),
+				mcp.Description("ID of the channel in format Cxxxxxxxxxx or its name starting with #... or @... aka #general or @username_dm."),
+			),
+			mcp.WithString("ts",
+				mcp.Required(),
+				mcp.Description("Timestamp of the message to edit, in format 1234567890.123456 — the ts returned when it was posted."),
+			),
+			mcp.WithString("text",
+				mcp.Required(),
+				mcp.Description("New message text in specified content_type format. It replaces the whole message text."),
+			),
+			mcp.WithString("content_type",
+				mcp.DefaultString("text/markdown"),
+				mcp.Description("Content type of the new text. Default is 'text/markdown'. Allowed values: 'text/markdown', 'text/plain'."),
+			),
+		), conversationsHandler.ConversationsUpdateMessageHandler)
+	}
+
+	if shouldAddTool(ToolConversationsDeleteMessage, enabledTools, "SLACK_MCP_ADD_MESSAGE_TOOL") {
+		s.AddTool(mcp.NewTool(ToolConversationsDeleteMessage,
+			mcp.WithDescription("Permanently delete a message the authenticated user sent, in a public channel, private channel, thread or direct message (DM, or IM). Irreversible. Identify it by channel_id and its own ts. Slack refuses to delete other people's messages (cant_delete_message). Gated by the same SLACK_MCP_ADD_MESSAGE_TOOL channel policy as conversations_add_message."),
+			mcp.WithTitleAnnotation("Delete Message"),
+			mcp.WithDestructiveHintAnnotation(true),
+			mcp.WithString("channel_id",
+				mcp.Required(),
+				mcp.Description("ID of the channel in format Cxxxxxxxxxx or its name starting with #... or @... aka #general or @username_dm."),
+			),
+			mcp.WithString("ts",
+				mcp.Required(),
+				mcp.Description("Timestamp of the message to delete, in format 1234567890.123456."),
+			),
+		), conversationsHandler.ConversationsDeleteMessageHandler)
 	}
 
 	if shouldAddTool(ToolReactionsAdd, enabledTools, "SLACK_MCP_REACTION_TOOL") {
