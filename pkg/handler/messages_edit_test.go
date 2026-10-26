@@ -27,6 +27,25 @@ type editMockSlack struct {
 	deleteChannel string
 	deleteTs      string
 	deleteErr     error
+
+	// replies is what conversations.replies returns for the ownership check.
+	replies       []slack.Message
+	repliesParams *slack.GetConversationRepliesParameters
+}
+
+const selfUserID = "USELF0001"
+
+func (m *editMockSlack) AuthTestContext(context.Context) (*slack.AuthTestResponse, error) {
+	return &slack.AuthTestResponse{UserID: selfUserID}, nil
+}
+
+func (m *editMockSlack) GetConversationRepliesContext(_ context.Context, params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error) {
+	m.repliesParams = params
+	return m.replies, false, "", nil
+}
+
+func ownMessage(ts string) []slack.Message {
+	return []slack.Message{{Msg: slack.Msg{Timestamp: ts, User: selfUserID}}}
 }
 
 func (m *editMockSlack) UpdateMessageContext(_ context.Context, channel, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
@@ -40,7 +59,7 @@ func (m *editMockSlack) UpdateMessageContext(_ context.Context, channel, timesta
 	if m.updateErr != nil {
 		return "", "", "", m.updateErr
 	}
-	return channel, timestamp, values.Get("text"), nil
+	return channel, timestamp, "stored: " + values.Get("text"), nil
 }
 
 func (m *editMockSlack) DeleteMessageContext(_ context.Context, channel, timestamp string) (string, string, error) {
@@ -86,7 +105,10 @@ func TestUnitConversationsUpdateMessage(t *testing.T) {
 		assert.Equal(t, "1700000000.000100", m.updateTs)
 		assert.Equal(t, "see <https://example.com|the link> & *bold*", m.updateValues.Get("text"))
 		assert.Equal(t, "none", m.updateValues.Get("parse"))
-		assert.Contains(t, resultText(t, res), "Successfully updated message in channel D0123456789 (ts=1700000000.000100)")
+		assert.Equal(t, "[]", m.updateValues.Get("blocks"), "a plain edit must clear blocks the original may carry")
+		text := resultText(t, res)
+		assert.Contains(t, text, "Successfully updated message in channel D0123456789 (ts=1700000000.000100)")
+		assert.Contains(t, text, "Stored text: stored: see <https://example.com|the link> & *bold*")
 	})
 
 	t.Run("markdown is converted to blocks like add_message", func(t *testing.T) {
@@ -160,7 +182,7 @@ func TestUnitConversationsUpdateMessage(t *testing.T) {
 func TestUnitConversationsDeleteMessage(t *testing.T) {
 	t.Run("deletes by channel and ts", func(t *testing.T) {
 		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
-		m := &editMockSlack{}
+		m := &editMockSlack{replies: ownMessage("1700000000.000100")}
 		res, err := newEditHandler(m).ConversationsDeleteMessageHandler(context.Background(), toolRequest(map[string]any{
 			"channel_id": "D0123456789", "ts": "1700000000.000100",
 		}))
@@ -168,6 +190,43 @@ func TestUnitConversationsDeleteMessage(t *testing.T) {
 		assert.Equal(t, "D0123456789", m.deleteChannel)
 		assert.Equal(t, "1700000000.000100", m.deleteTs)
 		assert.Contains(t, resultText(t, res), "Successfully deleted message in channel D0123456789 (ts=1700000000.000100)")
+		require.NotNil(t, m.repliesParams)
+		assert.Equal(t, "1700000000.000100", m.repliesParams.Timestamp)
+	})
+
+	t.Run("thread reply is found among the thread's messages", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
+		m := &editMockSlack{replies: []slack.Message{
+			{Msg: slack.Msg{Timestamp: "1700000000.000001", User: "UOTHER001"}},
+			{Msg: slack.Msg{Timestamp: "1700000000.000100", User: selfUserID}},
+		}}
+		_, err := newEditHandler(m).ConversationsDeleteMessageHandler(context.Background(), toolRequest(map[string]any{
+			"channel_id": "C0123456789", "ts": "1700000000.000100",
+		}))
+		require.NoError(t, err)
+		assert.Equal(t, "1700000000.000100", m.deleteTs)
+	})
+
+	t.Run("someone else's message is refused before chat.delete", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
+		m := &editMockSlack{replies: []slack.Message{{Msg: slack.Msg{Timestamp: "1700000000.000100", User: "UOTHER001"}}}}
+		_, err := newEditHandler(m).ConversationsDeleteMessageHandler(context.Background(), toolRequest(map[string]any{
+			"channel_id": "C0123456789", "ts": "1700000000.000100",
+		}))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cant_delete_message")
+		assert.Empty(t, m.deleteChannel)
+	})
+
+	t.Run("message absent from conversations.replies is message_not_found", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
+		m := &editMockSlack{}
+		_, err := newEditHandler(m).ConversationsDeleteMessageHandler(context.Background(), toolRequest(map[string]any{
+			"channel_id": "C0123456789", "ts": "1700000000.000100",
+		}))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "message_not_found")
+		assert.Empty(t, m.deleteChannel)
 	})
 
 	t.Run("disabled without SLACK_MCP_ADD_MESSAGE_TOOL", func(t *testing.T) {
@@ -203,7 +262,7 @@ func TestUnitConversationsDeleteMessage(t *testing.T) {
 
 	t.Run("message_not_found is passed through", func(t *testing.T) {
 		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
-		m := &editMockSlack{deleteErr: errors.New("message_not_found")}
+		m := &editMockSlack{replies: ownMessage("1700000000.000100"), deleteErr: errors.New("message_not_found")}
 		_, err := newEditHandler(m).ConversationsDeleteMessageHandler(context.Background(), toolRequest(map[string]any{
 			"channel_id": "C0123456789", "ts": "1700000000.000100",
 		}))

@@ -231,7 +231,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 
 	if shouldAddTool(ToolConversationsDeleteMessage, enabledTools, "SLACK_MCP_ADD_MESSAGE_TOOL") {
 		s.AddTool(mcp.NewTool(ToolConversationsDeleteMessage,
-			mcp.WithDescription("Permanently delete a message the authenticated user sent, in a public channel, private channel, thread or direct message (DM, or IM). Irreversible. Identify it by channel_id and its own ts. Slack refuses to delete other people's messages (cant_delete_message). Gated by the same SLACK_MCP_ADD_MESSAGE_TOOL channel policy as conversations_add_message."),
+			mcp.WithDescription("Permanently delete a message the authenticated user sent, in a public channel, private channel, thread or direct message (DM, or IM). Irreversible. Identify it by channel_id and its own ts. Only the user's own messages: the tool refuses anyone else's (cant_delete_message), even when the user is a workspace admin who could delete it in Slack. Gated by the same SLACK_MCP_ADD_MESSAGE_TOOL channel policy as conversations_add_message."),
 			mcp.WithTitleAnnotation("Delete Message"),
 			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithString("channel_id",
