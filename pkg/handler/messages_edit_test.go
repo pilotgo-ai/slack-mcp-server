@@ -28,6 +28,8 @@ type editMockSlack struct {
 	deleteTs      string
 	deleteErr     error
 
+	// authUserID overrides the auth.test user id (default selfUserID).
+	authUserID *string
 	// replies is what conversations.replies returns for the ownership check.
 	replies       []slack.Message
 	repliesParams *slack.GetConversationRepliesParameters
@@ -36,6 +38,9 @@ type editMockSlack struct {
 const selfUserID = "USELF0001"
 
 func (m *editMockSlack) AuthTestContext(context.Context) (*slack.AuthTestResponse, error) {
+	if m.authUserID != nil {
+		return &slack.AuthTestResponse{UserID: *m.authUserID}, nil
+	}
 	return &slack.AuthTestResponse{UserID: selfUserID}, nil
 }
 
@@ -215,6 +220,18 @@ func TestUnitConversationsDeleteMessage(t *testing.T) {
 		}))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "cant_delete_message")
+		assert.Empty(t, m.deleteChannel)
+	})
+
+	t.Run("empty auth user id refuses an author-less message", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
+		empty := ""
+		m := &editMockSlack{authUserID: &empty, replies: []slack.Message{{Msg: slack.Msg{Timestamp: "1700000000.000100"}}}}
+		_, err := newEditHandler(m).ConversationsDeleteMessageHandler(context.Background(), toolRequest(map[string]any{
+			"channel_id": "C0123456789", "ts": "1700000000.000100",
+		}))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no user_id")
 		assert.Empty(t, m.deleteChannel)
 	})
 

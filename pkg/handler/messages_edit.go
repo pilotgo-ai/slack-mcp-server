@@ -122,6 +122,10 @@ func (ch *ConversationsHandler) ensureOwnMessage(ctx context.Context, channel, t
 	if err != nil {
 		return fmt.Errorf("auth.test failed: %w", err)
 	}
+	if auth.UserID == "" {
+		// Fail closed: an empty id would match author-less (bot) messages.
+		return errors.New("auth.test returned no user_id; cannot verify message ownership")
+	}
 	msgs, _, _, err := ch.apiProvider.Slack().GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: channel,
 		Timestamp: ts,
