@@ -28,24 +28,28 @@ type editMockSlack struct {
 	deleteTs      string
 	deleteErr     error
 
-	// authUserID overrides the auth.test user id (default selfUserID).
-	authUserID *string
+	// noAuthUser makes auth.test return an empty user id.
+	noAuthUser bool
 	// replies is what conversations.replies returns for the ownership check.
 	replies       []slack.Message
+	repliesErr    error
 	repliesParams *slack.GetConversationRepliesParameters
 }
 
 const selfUserID = "USELF0001"
 
-func (m *editMockSlack) AuthTestContext(context.Context) (*slack.AuthTestResponse, error) {
-	if m.authUserID != nil {
-		return &slack.AuthTestResponse{UserID: *m.authUserID}, nil
+func (m *editMockSlack) AuthTest() (*slack.AuthTestResponse, error) {
+	if m.noAuthUser {
+		return &slack.AuthTestResponse{}, nil
 	}
 	return &slack.AuthTestResponse{UserID: selfUserID}, nil
 }
 
 func (m *editMockSlack) GetConversationRepliesContext(_ context.Context, params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error) {
 	m.repliesParams = params
+	if m.repliesErr != nil {
+		return nil, false, "", m.repliesErr
+	}
 	return m.replies, false, "", nil
 }
 
@@ -126,6 +130,7 @@ func TestUnitConversationsUpdateMessage(t *testing.T) {
 		}))
 		require.NoError(t, err)
 		assert.NotEmpty(t, m.updateValues.Get("blocks"))
+		assert.Equal(t, "# Title", m.updateValues.Get("text"), "the fallback text must be replaced too")
 		assert.Equal(t, "none", m.updateValues.Get("parse"))
 	})
 
@@ -225,13 +230,23 @@ func TestUnitConversationsDeleteMessage(t *testing.T) {
 
 	t.Run("empty auth user id refuses an author-less message", func(t *testing.T) {
 		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
-		empty := ""
-		m := &editMockSlack{authUserID: &empty, replies: []slack.Message{{Msg: slack.Msg{Timestamp: "1700000000.000100"}}}}
+		m := &editMockSlack{noAuthUser: true, replies: []slack.Message{{Msg: slack.Msg{Timestamp: "1700000000.000100"}}}}
 		_, err := newEditHandler(m).ConversationsDeleteMessageHandler(context.Background(), toolRequest(map[string]any{
 			"channel_id": "C0123456789", "ts": "1700000000.000100",
 		}))
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no user_id")
+		assert.Empty(t, m.deleteChannel)
+	})
+
+	t.Run("thread_not_found from conversations.replies is message_not_found", func(t *testing.T) {
+		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
+		m := &editMockSlack{repliesErr: slack.SlackErrorResponse{Err: "thread_not_found"}}
+		_, err := newEditHandler(m).ConversationsDeleteMessageHandler(context.Background(), toolRequest(map[string]any{
+			"channel_id": "C0123456789", "ts": "1700000000.000100",
+		}))
+		require.Error(t, err)
+		assert.Equal(t, "message_not_found", err.Error())
 		assert.Empty(t, m.deleteChannel)
 	})
 

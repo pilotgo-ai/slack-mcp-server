@@ -55,7 +55,9 @@ func (ch *ConversationsHandler) ConversationsUpdateMessageHandler(ctx context.Co
 			ch.logger.Warn("Markdown parsing error", zap.Error(err))
 			options = append(options, plain...)
 		} else {
-			options = append(options, slack.MsgOptionBlocks(blocks...))
+			// chat.update keeps fields it is not sent: without text the old
+			// fallback (notifications, search) would outlive the edit.
+			options = append(options, slack.MsgOptionBlocks(blocks...), slack.MsgOptionText(msgText, false))
 		}
 	default:
 		return nil, errors.New("content_type must be either 'text/plain' or 'text/markdown'")
@@ -118,7 +120,9 @@ func (ch *ConversationsHandler) ConversationsDeleteMessageHandler(ctx context.Co
 // authenticated user. conversations.replies resolves both a top-level message
 // and a thread reply by its own ts; latest=oldest=ts narrows the reply list.
 func (ch *ConversationsHandler) ensureOwnMessage(ctx context.Context, channel, ts string) error {
-	auth, err := ch.apiProvider.Slack().AuthTestContext(ctx)
+	// AuthTest (not AuthTestContext) returns the response the client cached at
+	// startup — no extra Slack round trip per delete.
+	auth, err := ch.apiProvider.Slack().AuthTest()
 	if err != nil {
 		return fmt.Errorf("auth.test failed: %w", err)
 	}
@@ -134,6 +138,11 @@ func (ch *ConversationsHandler) ensureOwnMessage(ctx context.Context, channel, t
 		Inclusive: true,
 	})
 	if err != nil {
+		// conversations.replies reports a missing ts as thread_not_found;
+		// surface it as chat.delete would.
+		if strings.Contains(err.Error(), "thread_not_found") {
+			return errors.New("message_not_found")
+		}
 		return err
 	}
 	for _, m := range msgs {
