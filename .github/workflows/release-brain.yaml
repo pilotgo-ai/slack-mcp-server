@@ -50,4 +50,4 @@ jobs:
             build/slack-mcp-server-linux-amd64 \
             build/slack-mcp-server-linux-amd64.sha256 \
             --title "${GITHUB_REF_NAME}" \
-            --notes "Brain fork of korotovsky/slack-mcp-server: adds conversations_update_message and conversations_delete_message."
+            --notes "Brain fork of korotovsky/slack-mcp-server: adds conversations_update_message and conversations_delete_message; text/markdown is formatted into Slack mrkdwn by the slack-mrkdwn-gate formatter (pkg/text/mrkdwn) instead of Block Kit - Claude Code sessions already run that gate as a hook, this covers engines without it (e.g. Hermes)."

@@ -120,17 +120,19 @@ func TestUnitConversationsUpdateMessage(t *testing.T) {
 		assert.Contains(t, text, "Stored text: stored: see <https://example.com|the link> & *bold*")
 	})
 
-	t.Run("markdown is converted to blocks like add_message", func(t *testing.T) {
+	t.Run("A01 markdown is sent as formatted text", func(t *testing.T) {
+		requirePython(t)
 		t.Setenv("SLACK_MCP_ADD_MESSAGE_TOOL", "true")
+		t.Setenv("HOME", t.TempDir())
 		m := &editMockSlack{}
 		_, err := newEditHandler(m).ConversationsUpdateMessageHandler(context.Background(), toolRequest(map[string]any{
 			"channel_id": "C0123456789",
 			"ts":         "1700000000.000100",
-			"text":       "# Title",
+			"text":       "# Title\nline two <https://example.com|link>",
 		}))
 		require.NoError(t, err)
-		assert.NotEmpty(t, m.updateValues.Get("blocks"))
-		assert.Equal(t, "# Title", m.updateValues.Get("text"), "the fallback text must be replaced too")
+		assert.Equal(t, "*Title*\nline two <https://example.com|link>", m.updateValues.Get("text"))
+		assert.Equal(t, "[]", m.updateValues.Get("blocks"), "blocks of the original must be cleared")
 		assert.Equal(t, "none", m.updateValues.Get("parse"))
 	})
 
