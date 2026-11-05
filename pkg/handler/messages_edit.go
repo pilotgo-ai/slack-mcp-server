@@ -12,9 +12,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/korotovsky/slack-mcp-server/pkg/text/mrkdwn"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/slack-go/slack"
-	slackGoUtil "github.com/takara2314/slack-go-util"
 	"go.uber.org/zap"
 )
 
@@ -50,15 +50,10 @@ func (ch *ConversationsHandler) ConversationsUpdateMessageHandler(ctx context.Co
 	case "text/plain":
 		options = append(options, plain...)
 	case "text/markdown":
-		blocks, err := slackGoUtil.ConvertMarkdownTextToBlocks(msgText)
-		if err != nil {
-			ch.logger.Warn("Markdown parsing error", zap.Error(err))
-			options = append(options, plain...)
-		} else {
-			// chat.update keeps fields it is not sent: without text the old
-			// fallback (notifications, search) would outlive the edit.
-			options = append(options, slack.MsgOptionBlocks(blocks...), slack.MsgOptionText(msgText, false))
-		}
+		// Same formatting as add_message; the empty blocks clear any blocks an
+		// older message carries, which would otherwise win over the new text.
+		formatted := mrkdwn.FormatOrRaw(ctx, ch.logger, msgText)
+		options = append(options, slack.MsgOptionText(formatted, false), slack.MsgOptionBlocks([]slack.Block{}...))
 	default:
 		return nil, errors.New("content_type must be either 'text/plain' or 'text/markdown'")
 	}
