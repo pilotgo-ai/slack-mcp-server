@@ -32,7 +32,7 @@ format: draft (Markdown or mrkdwn, stdin or --file) -> Slack mrkdwn on stdout; s
   **x** -> *x*, # heading -> *bold line*, -/*/+ bullets -> •, [t](u) -> <u|t>, tables -> bullets,
   & < > -> entities, literal \\n -> newline, "~" meaning approximately -> "≈ " (--approx "ok." for Polish),
   names with _ or * (file_name.py, *.py, 2*3) -> `backticks` (--no-wrap skips); code, <links|mentions>,
-  URLs, e-mails and :emoji: stay byte-exact. --footer slack ends the text with "— :brain: Brain".
+  URLs, e-mails and :emoji: stay byte-exact. --footer slack appends " - :brain: Brain" to the end of the last non-empty line.
   Lints its own output; --check prints nothing and exits 1 if the draft would change or has lint errors.
 lint: findings on stderr as "ERROR line N: ..." (renders wrong, fix before sending) / "WARN line N: ...".
 Example: python3 scripts/mrkdwn.py format --approx "ok." < draft.txt
@@ -45,9 +45,15 @@ Exit codes: 0 ok (warnings only) · 1 lint ERROR left / --check found changes ·
 DEFAULT_APPROX = "≈"
 # Not allowed in --approx: Slack formatting/code markers would reintroduce the problem.
 FORBIDDEN_APPROX_CHARS = "~*_`<>&"
-# The one footer this file knows; the WhatsApp-style variant is rewritten to it.
-SLACK_FOOTER = "— :brain: Brain"
-WRONG_FOOTER_RE = re.compile(r"^\s*—\s*🧠\s*Brain\s*$")
+# The one footer this file knows, written at the END of the last non-empty line after one space:
+# on its own line Slack renders a leading "- " as a bullet, and a long dash is off-style.
+# Every other variant (own line, long dash, the WhatsApp emoji) is rewritten to it.
+SLACK_FOOTER = "- :brain: Brain"
+INLINE_FOOTER = " " + SLACK_FOOTER
+# Footer variants: an optional dash (or a bullet the line step made of "- "), :brain: or the
+# WhatsApp emoji, then "Brain"; FOOTER_LINE_RE = alone on a line, FOOTER_TAIL_RE = ending a line.
+FOOTER_LINE_RE = re.compile(r"^\s*(?:[-—–•]\s*)?(?::brain:|🧠)\s*Brain\s*$")
+FOOTER_TAIL_RE = re.compile(r"^(?P<head>.*?\S)\s*(?P<dash>[-—–]\s*)?(?P<mark>:brain:|🧠)\s*Brain\s*$")
 FOOTER_CHOICES = ("slack",)
 
 # Slack hard limit for a message's text field (longer is rejected by the API).
@@ -141,7 +147,9 @@ DUNDER_RE = re.compile(r"[a-z][a-z0-9_]*")
 FENCE_LANG_RE = re.compile(r"```[ \t]*[A-Za-z0-9_+#.-]+[ \t]*\n")
 HEADING_RE = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
 HR_RE = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
-HR_OUT = "———"
+# Plain hyphens: generated text may hold only plain "-" dashes, never long ones; Slack shows "---"
+# as literal text, and HR_RE maps it back to itself, so re-formatting leaves it unchanged.
+HR_OUT = "---"
 BULLET_RE = re.compile(r"^([ \t]*)([-*+])[ \t]+(?=\S)(.*)$")
 # 2 spaces: the smallest indent Markdown editors and LLM drafts use for a sub-bullet (a tab counts as 4).
 NESTED_INDENT = 2
@@ -343,7 +351,8 @@ def table_rows_to_bullets(header, rows):
         parts = ", ".join("%s: %s" % (h, v) if h else v for h, v in rest)
         head = first if not first or (first.startswith("*") and first.endswith("*") and len(first) > 1) else "*%s*" % first
         if head and parts:
-            out.append("• %s — %s" % (head, parts))
+            # Plain hyphen: generated text may hold only plain "-" dashes, never long ones.
+            out.append("• %s - %s" % (head, parts))
         else:
             out.append("• " + (head or parts))
     return out
@@ -597,24 +606,60 @@ def step_wrap(text, st):
     return "\n".join(out_lines)
 
 
+def last_nonempty(lines, end=None):
+    k = (len(lines) if end is None else end) - 1
+    while k >= 0 and not lines[k].strip():
+        k -= 1
+    return k
+
+
 def step_footer(text, footer, st):
+    """Put exactly one " - :brain: Brain" at the end of the last non-empty line (idempotent)."""
     if footer != "slack":
         return text
     body = text.rstrip("\n")
     tail = text[len(body):]
     lines = body.split("\n")
-    k = len(lines) - 1
-    while k >= 0 and not lines[k].strip():
-        k -= 1
-    if k >= 0 and lines[k].strip() == SLACK_FOOTER:
-        return text
-    if k >= 0 and WRONG_FOOTER_RE.match(lines[k]):
-        lines[k] = SLACK_FOOTER
-        st["footer replaced"] = 1
-        return "\n".join(lines) + tail
-    st["footer appended"] = 1
-    sep = "\n\n" if body.strip() else ""
-    return body + sep + SLACK_FOOTER + (tail or "")
+    k = last_nonempty(lines)
+    if k < 0:
+        return text  # nothing to attach the footer to
+    if FOOTER_LINE_RE.match(lines[k]):
+        prev = last_nonempty(lines, k)
+        if prev < 0:
+            return text  # the text is only a footer; there is no line to move it onto
+        lines = lines[:prev + 1]
+        k = prev
+        st["footer moved"] = 1
+    line = lines[k]
+    m = FOOTER_TAIL_RE.match(line)
+    if m:
+        if line != m.group("head") + INLINE_FOOTER:
+            lines[k] = m.group("head") + INLINE_FOOTER
+            st["footer replaced"] = 1
+    else:
+        lines[k] = line.rstrip() + INLINE_FOOTER
+        st["footer appended"] = 1
+    return "\n".join(lines) + tail
+
+
+def footer_finding(lines):
+    """At most one footer ERROR for the last non-empty line, the most specific one."""
+    nonempty = [(n, l) for n, (_, l) in enumerate(lines, 1) if l.strip()]
+    if not nonempty:
+        return None
+    n, line = nonempty[-1]
+    own = FOOTER_LINE_RE.match(line)
+    m = None if own else FOOTER_TAIL_RE.match(line)
+    if not (own or m):
+        return None
+    fix = 'put "%s" at the end of the last line: run format --footer slack' % INLINE_FOOTER
+    if "🧠" in (line if own else m.group("mark")):
+        return ("ERROR", n, "footer", 'footer with 🧠 is the WhatsApp one; on Slack use "%s" at the end of the last line (format --footer slack)' % INLINE_FOOTER)
+    if own:
+        return ("ERROR", n, "footer", 'footer on its own line (Slack shows "- " at line start as a bullet); ' + fix)
+    if m.group("dash") and m.group("dash")[0] in "—–":
+        return ("ERROR", n, "footer", 'long dash in footer; use "%s": run format --footer slack' % INLINE_FOOTER)
+    return None
 
 
 def format_text(text, approx=DEFAULT_APPROX, wrap=True, footer=None):
@@ -703,9 +748,9 @@ def lint(text):
             f.append(("WARN", lineno, "mention", "bare %s will not ping — use <@U…> with the user's id" % m.group()))
         for m in BARE_CHANNEL_RE.finditer(vis):
             f.append(("WARN", lineno, "channel", "bare %s will not link — use <#C…> with the channel's id" % m.group()))
-    nonempty = [(n, l) for n, (_, l) in enumerate(lines, 1) if l.strip()]
-    if nonempty and WRONG_FOOTER_RE.match(nonempty[-1][1]):
-        f.append(("ERROR", nonempty[-1][0], "footer", 'footer "— 🧠 Brain" is the WhatsApp one; on Slack use "%s" (format --footer slack)' % SLACK_FOOTER))
+    ff = footer_finding(lines)
+    if ff:
+        f.append(ff)
     return f
 
 
